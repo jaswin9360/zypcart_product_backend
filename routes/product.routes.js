@@ -252,15 +252,15 @@ router.post('/orders/checkout', async (req, res) => {
 router.put('/orders/checkout/:orderId', async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { paymentMethod, paymentStatus ,status} = req.body;
-        console.log(paymentMethod,paymentStatus)
+        const { paymentMethods, paymentStatus ,status} = req.body;
+        console.log(paymentMethods,paymentStatus)
 
         // Find the order and update the payment details
         const updatedOrder = await Order.findByIdAndUpdate(
             orderId,
             { 
                 $set: { 
-                    paymentMethods: paymentMethod, 
+                    paymentMethods: paymentMethods, 
                     paymentStatus: paymentStatus ,
                     status:status
                 } 
