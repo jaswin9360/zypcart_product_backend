@@ -16,7 +16,10 @@ connectDB();
 
 // Application Middleware
 app.use(express.json());
-app.use(cors({ origin: process.env.FRONTEND_URL  }));
+app.use(cors({
+  origin: [process.env.FRONTEND_URL,"https://zypcart.wuaze.com"],
+  credentials: true
+}))
 
 // Link Specialized Routes (Auth routes completely dropped)
 app.use('/api/products', productRoutes);
