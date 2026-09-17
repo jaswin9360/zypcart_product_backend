@@ -51,22 +51,23 @@ const productSchema = new mongoose.Schema({
   },
   discountReason: { 
     type: String, 
-    default: "" // Keeps standard text tags for campaign notes (e.g., "Diwali Offer")
+    default: ""
   },
-
 
   // ==================================================================
   // INFINITE EXTENDABLE SPECIFICATIONS MATRIX
   // ==================================================================
   specifications: [
     {
-      key: { type: String, trim: true },   // User entered Label (e.g., "Fabric", "Camera")
-      value: { type: String, trim: true }  // User entered Detail (e.g., "100% Cotton", "48MP")
+      key: { type: String, trim: true },
+      value: { type: String, trim: true }
     }
   ],
-
-  
 },
-{ timestamps: true }); // Automatically manages 'createdAt' and 'updatedAt'
+{ timestamps: true });
+
+// createdAt is intentionally a normal index, NOT a TTL index.
+// Products must remain in the database until explicitly deleted.
+productSchema.index({ createdAt: 1 });
 
 export const Product = mongoose.model('Product', productSchema);
