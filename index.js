@@ -41,13 +41,12 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-
 // Link Specialized Routes (Auth routes completely dropped)
 app.use('/api/products', productRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/coupons', couponRoutes);
-app.use("/api/contact", contactRoutes);
-app.use("/api/delivery", deliveryApplications);
+app.use('/api/contact', contactRoutes);
+app.use('/api/delivery', deliveryApplications);
 // Health diagnostics check
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
