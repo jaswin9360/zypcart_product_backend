@@ -4,9 +4,9 @@ import dotenv from 'dotenv';
 import couponRoutes from "./routes/couponRoutes.js"
 import { connectDB } from './config/db.js';
 import cartRoutes from './routes/cartRoutes.js';
-const contactRoutes = require("./routes/contact");
+import contactRoutes from './routes/contact.js'
 import productRoutes from './routes/product.routes.js';
-const deliveryApplications = require("./routes/deliveryApplications");
+import deliveryApplications from './routes/deliveryApplications.js'
 import dns from "dns"
 dns.setServers(['1.1.1.1','8.8.8.8'])
 
