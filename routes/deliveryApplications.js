@@ -5,13 +5,17 @@ import rateLimit from "express-rate-limit";
 import path from "path";
 import fs from "fs";
 
-import { fileURLToPath } from "url";
 import DeliveryApplication from "../models/DeliveryApplication.js";
+import auth from "../middleware/auth.js";
 import requireAdmin from "../middleware/requireAdmin.js";
 
 const router = express.Router();
 
-const uploadDir = path.join(process.cwd(), "private-uploads", "delivery");
+const uploadDir = path.join(
+  process.cwd(),
+  "private-uploads",
+  "delivery"
+);
 
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -41,7 +45,9 @@ const upload = multer({
   },
   fileFilter: (req, file, cb) => {
     if (!allowedMimeTypes.has(file.mimetype)) {
-      return cb(new Error("Only JPG, PNG, and PDF files are allowed."));
+      return cb(
+        new Error("Only JPG, PNG, and PDF files are allowed.")
+      );
     }
 
     cb(null, true);
@@ -64,7 +70,7 @@ function asyncHandler(handler) {
     Promise.resolve(handler(req, res, next)).catch(next);
 }
 
-// Public delivery partner application
+// Public: submit a delivery partner application.
 router.post(
   "/apply",
   applicationLimiter,
@@ -107,7 +113,8 @@ router.post(
     if (existingApplication) {
       return res.status(409).json({
         success: false,
-        message: "A pending application already exists for this email.",
+        message:
+          "A pending application already exists for this email.",
       });
     }
 
@@ -143,9 +150,11 @@ router.post(
   })
 );
 
-// Admin: list applications
+// Admin: list all applications.
+// Authentication runs before the admin role check.
 router.get(
   "/admin/applications",
+  auth,
   requireAdmin,
   asyncHandler(async (req, res) => {
     const applications = await DeliveryApplication.find()
@@ -160,9 +169,10 @@ router.get(
   })
 );
 
-// Admin: approve or reject an application
+// Admin: approve or reject an application.
 router.patch(
   "/admin/applications/:id/review",
+  auth,
   requireAdmin,
   asyncHandler(async (req, res) => {
     const { status, reviewNote } = req.body;
