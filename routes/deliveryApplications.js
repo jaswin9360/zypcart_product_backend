@@ -1,12 +1,13 @@
-// routes/deliveryApplications.js
-const express = require("express");
-const multer = require("multer");
-const rateLimit = require("express-rate-limit");
-const path = require("path");
-const fs = require("fs");
 
-const DeliveryApplication = require("../models/DeliveryApplication");
-const requireAdmin = require("../middleware/requireAdmin");
+import express from "express";
+import multer from "multer";
+import rateLimit from "express-rate-limit";
+import path from "path";
+import fs from "fs";
+
+import { fileURLToPath } from "url";
+import DeliveryApplication from "../models/DeliveryApplication.js";
+import requireAdmin from "../middleware/requireAdmin.js";
 
 const router = express.Router();
 
@@ -63,7 +64,7 @@ function asyncHandler(handler) {
     Promise.resolve(handler(req, res, next)).catch(next);
 }
 
-// Public application endpoint: no customer login required.
+// Public delivery partner application
 router.post(
   "/apply",
   applicationLimiter,
@@ -131,7 +132,7 @@ router.post(
       documents,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Your delivery partner application has been submitted.",
       application: {
@@ -142,8 +143,7 @@ router.post(
   })
 );
 
-// Protect these routes with your real authentication middleware
-// before requireAdmin. Never trust a client-provided role.
+// Admin: list applications
 router.get(
   "/admin/applications",
   requireAdmin,
@@ -153,13 +153,14 @@ router.get(
       .sort({ createdAt: -1 })
       .lean();
 
-    res.json({
+    return res.json({
       success: true,
       applications,
     });
   })
 );
 
+// Admin: approve or reject an application
 router.patch(
   "/admin/applications/:id/review",
   requireAdmin,
@@ -193,7 +194,7 @@ router.patch(
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: `Application ${status.toLowerCase()}.`,
       application,
@@ -201,4 +202,4 @@ router.patch(
   })
 );
 
-module.exports = router;
+export default router;

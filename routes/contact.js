@@ -1,6 +1,8 @@
-const express = require("express");
+
+import express from "express";
+import Contact from "../models/Contact.js";
+
 const router = express.Router();
-const Contact = require("../models/Contact");
 
 router.post("/", async (req, res) => {
   try {
@@ -13,20 +15,25 @@ router.post("/", async (req, res) => {
       !message?.trim()
     ) {
       return res.status(400).json({
+        success: false,
         message: "Please complete all required fields.",
       });
     }
 
-    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+      email.trim()
+    );
 
     if (!validEmail) {
       return res.status(400).json({
+        success: false,
         message: "Please provide a valid email address.",
       });
     }
 
     if (message.trim().length < 10) {
       return res.status(400).json({
+        success: false,
         message: "Message must contain at least 10 characters.",
       });
     }
@@ -47,9 +54,10 @@ router.post("/", async (req, res) => {
     console.error("Contact form error:", error);
 
     return res.status(500).json({
+      success: false,
       message: "Unable to submit your message. Please try again later.",
     });
   }
 });
 
-module.exports = router;
+export default router;
