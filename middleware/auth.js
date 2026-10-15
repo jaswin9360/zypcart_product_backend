@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 
 // Adjust this import to match your project's actual User model.
-import User from "../models/schema";
+import User from "../models/User";
 
 export default async function auth(req, res, next) {
   try {
