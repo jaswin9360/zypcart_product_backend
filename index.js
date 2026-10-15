@@ -6,7 +6,7 @@ import { connectDB } from './config/db.js';
 import cartRoutes from './routes/cartRoutes.js';
 const contactRoutes = require("./routes/contact");
 import productRoutes from './routes/product.routes.js';
-import deliveryApplicationsRouter from "./routes/deliveryApplications.js"
+const deliveryApplications = require("./routes/deliveryApplications");
 import dns from "dns"
 dns.setServers(['1.1.1.1','8.8.8.8'])
 
@@ -47,7 +47,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use("/api/contact", contactRoutes);
-app.use("/api/delivery", deliveryApplicationsRouter);
+app.use("/api/delivery", deliveryApplications);
 // Health diagnostics check
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
