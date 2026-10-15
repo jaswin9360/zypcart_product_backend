@@ -1,3 +1,4 @@
+
 import mongoose from "mongoose";
 
 const deliveryApplicationSchema = new mongoose.Schema(
@@ -77,7 +78,8 @@ const deliveryApplicationSchema = new mongoose.Schema(
 
 deliveryApplicationSchema.index({ email: 1, status: 1 });
 
-module.exports = mongoose.model(
-  "DeliveryApplication",
-  deliveryApplicationSchema
-);
+const DeliveryApplication =
+  mongoose.models.DeliveryApplication ||
+  mongoose.model("DeliveryApplication", deliveryApplicationSchema);
+
+export default DeliveryApplication;
