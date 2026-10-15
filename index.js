@@ -5,6 +5,8 @@ import couponRoutes from "./routes/couponRoutes.js"
 import { connectDB } from './config/db.js';
 import cartRoutes from './routes/cartRoutes.js';
 import productRoutes from './routes/product.routes.js';
+import dns from "dns"
+dns.setServers(['1.1.1.1','8.8.8.8'])
 
 dotenv.config();
 
@@ -16,10 +18,26 @@ connectDB();
 
 // Application Middleware
 app.use(express.json());
+
+const allowedOrigins = [
+  'https://zypcart.wuaze.com',
+  'https://localhost:5173'
+];
+
 app.use(cors({
-  origin: [process.env.FRONTEND_URL,"https://zypcart.wuaze.com"],
-  credentials: true
-}))
+  origin: function (origin, callback) {
+    // Allow requests without an Origin header, such as server-to-server calls
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked origin: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 
 // Link Specialized Routes (Auth routes completely dropped)
 app.use('/api/products', productRoutes);
