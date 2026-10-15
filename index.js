@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import couponRoutes from "./routes/couponRoutes.js"
 import { connectDB } from './config/db.js';
 import cartRoutes from './routes/cartRoutes.js';
+const contactRoutes = require("./routes/contact");
 import productRoutes from './routes/product.routes.js';
 import dns from "dns"
 dns.setServers(['1.1.1.1','8.8.8.8'])
@@ -18,6 +19,7 @@ connectDB();
 
 // Application Middleware
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const allowedOrigins = [
   'https://zypcart.wuaze.com',
@@ -43,7 +45,8 @@ app.use(cors({
 app.use('/api/products', productRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/coupons', couponRoutes);
-
+app.use("/api/contact", contactRoutes);
+app.use("/api/delivery", deliveryApplicationsRouter);
 // Health diagnostics check
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
