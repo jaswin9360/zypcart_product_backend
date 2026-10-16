@@ -6,12 +6,11 @@ import { connectDB } from './config/db.js';
 import cartRoutes from './routes/cartRoutes.js';
 import contactRoutes from './routes/contact.js'
 import productRoutes from './routes/product.routes.js';
-import deliveryAuthRoutes from './routes/deliveryAuth.js';
-import deliveryApplicationRoutes from './routes/deliveryApplications.js';
-import deliveryPartnerRoutes from './routes/deliveryPartner.js';
-import adminDeliveryApplicationRoutes from './routes/adminDeliveryApplications.js';
-import adminDeliveryRoutes from "./routes/adminDelivery.js";
-import requireAdmin from "./middleware/requireAdmin.js"
+import deliveryApplications from "./routes/deliveryApplications.js";
+import adminDeliveryApplications from "./routes/adminDeliveryApplications.js";
+import deliveryPartnerRoutes from "./routes/deliveryPartner.js";
+import adminDelivery from "./routes/adminDelivery.js";
+import { auth, requireAdmin } from "./middleware/deliveryAuth.js";
 
 import dns from "dns"
 dns.setServers(['1.1.1.1','8.8.8.8'])
@@ -52,12 +51,16 @@ app.use('/api/products', productRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/contact', contactRoutes);
-app.use('/api/delivery/auth', deliveryAuthRoutes);
-app.use('/api/delivery', deliveryApplicationRoutes);
-app.use('/api/delivery/partner', deliveryPartnerRoutes);
-app.use('/api/admin/delivery', adminDeliveryApplicationRoutes);
-// Protect this router with your real admin authorization middleware.
-app.use("/api/admin/delivery-partners", requireAdmin, adminDeliveryRoutes);
+
+app.use("/api/delivery", deliveryApplications);
+app.use("/api/delivery/admin", adminDeliveryApplications);
+app.use("/api/delivery/partner", deliveryPartnerRoutes);
+app.use(
+  "/api/admin/delivery-partners",
+  auth,
+  requireAdmin,
+  adminDelivery
+);
 // Health diagnostics check
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 

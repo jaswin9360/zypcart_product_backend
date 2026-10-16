@@ -19,7 +19,22 @@ const orderSchema = new mongoose.Schema({
   discountApplied : {type:Number ,required: false },
   DTD :{ type : Date , required: false}, 
   totalAmountPaid: { type: Number, required: true },
-  status: { type: String, enum: ['Processing', 'Shipped', 'Delivered'], default: 'Processing' }
+  status: { type: String, enum: ['Processing', 'Shipped', 'Delivered'], default: 'Processing' },
+  deliveryPartnerId: {
+  type: String,
+  default: null,
+  index: true,
+},
+deliveryPartnerId: {
+  type: String,
+  default: null,
+  index: true,
+},
+deliveryPartnerStatus: {
+  type: String,
+  enum: ["assigned", "accepted", "picked_up", "delivered"],
+  default: "assigned",
+},
 }, { timestamps: true });
 
 export const Order = mongoose.model('Order', orderSchema);
