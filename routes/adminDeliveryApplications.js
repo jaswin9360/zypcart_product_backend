@@ -1,7 +1,7 @@
 import express from 'express';
 import DeliveryApplication from '../models/DeliveryApplication.js';
 import DeliveryPartner from '../models/DeliveryPartner.js';
-import { auth, requireAdmin } from '../middleware/deliveryAuth.js';
+import { auth, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 router.use(auth, requireAdmin);
