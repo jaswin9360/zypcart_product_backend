@@ -19,8 +19,23 @@ const upload = multer({
   limits: { files: 3, fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => allowedMimeTypes.has(file.mimetype) ? cb(null, true) : cb(new Error('Only JPG, PNG, and PDF files are allowed.')),
 });
-const applicationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false });
-const asyncHandler = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+const applicationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false
+});
+const asyncHandler = (handler) => (req, res, next) =>
+  Promise.resolve(handler(req, res, next)).catch((error) => {
+    console.error('Delivery application submission failed:', {
+      name: error.name,
+      code: error.code,
+      message: error.message,
+      stack: error.stack
+    });
+
+    next(error);
+  });
 
 // Partner must register/log in before submitting an application.
 router.post('/apply', auth, requireDeliveryPartner, applicationLimiter, upload.array('documents', 3), asyncHandler(async (req, res) => {
