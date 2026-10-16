@@ -24,6 +24,7 @@ const PORT = process.env.PORT || 5000;
 // Connect Database Core
 connectDB();
 
+app.set('trust proxy', 1);
 // Application Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -63,6 +64,40 @@ app.use(
   requireAdmin,
   adminDelivery
 );
+app.use((err, req, res, next) => {
+  console.error('[API ERROR]', req.method, req.originalUrl, err);
+
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  if (err.code === 11000) {
+    return res.status(409).json({
+      success: false,
+      message: 'A record with this information already exists.',
+    });
+  }
+
+  if (err.name === 'ValidationError' || err.name === 'MulterError') {
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+
+  if (err.message?.includes('Only JPG, PNG, and PDF')) {
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+
+  return res.status(500).json({
+    success: false,
+    message: 'Internal server error. Please try again later.',
+  });
+});
+
 // Health diagnostics check
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
