@@ -9,6 +9,7 @@ import productRoutes from './routes/product.routes.js';
 import deliveryAuthRoutes from "./routes/deliveryAuth.js";
 import deliveryRoutes from "./routes/delivery.js";
 import adminDeliveryRoutes from "./routes/adminDelivery.js";
+import requireAdmin from "./middleware/requireAdmin.js"
 import deliveryApplications from './routes/deliveryApplications.js'
 import dns from "dns"
 dns.setServers(['1.1.1.1','8.8.8.8'])

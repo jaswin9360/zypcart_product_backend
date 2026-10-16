@@ -1,5 +1,5 @@
 import express from "express";
-import Order from "../models/Order.js";
+import {Order} from "../models/OrderSchema.js";
 import DeliveryPartner from "../models/DeliveryPartner.js";
 import {
   requireLogin,
