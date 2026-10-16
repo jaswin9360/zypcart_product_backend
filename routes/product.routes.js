@@ -326,4 +326,400 @@ cron.schedule('0 0 * * *', async () => {
 });
 
 
+
+
+/* ============================================================
+   POST: CANCEL AN ORDER
+   URL: /api/products/orders/:orderId/cancel
+   ============================================================ */
+
+router.post("/orders/:orderId/cancel", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { buyerId, reason = "Cancelled by customer" } = req.body;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(orderId) ||
+      !mongoose.Types.ObjectId.isValid(buyerId || "")
+    ) {
+      return res.status(400).json({
+        message: "Valid order ID and buyer ID are required.",
+      });
+    }
+
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    if (String(order.buyerId) !== String(buyerId)) {
+      return res.status(403).json({
+        message: "You cannot cancel another buyer's order.",
+      });
+    }
+
+    const status = String(order.status || "")
+      .toLowerCase()
+      .replace(/[_-]/g, " ");
+
+    const deliveryStatus = String(order.deliveryStatus || "")
+      .toLowerCase()
+      .replace(/[_-]/g, " ");
+
+    const blockedStatuses = [
+      "cancelled",
+      "canceled",
+      "delivered",
+      "success",
+      "completed",
+      "shipped",
+      "dispatched",
+      "out for delivery",
+      "in transit",
+      "picked up",
+      "returned",
+    ];
+
+    if (
+      blockedStatuses.includes(status) ||
+      blockedStatuses.includes(deliveryStatus)
+    ) {
+      return res.status(400).json({
+        message: "This order can no longer be cancelled.",
+      });
+    }
+
+    // Prevent duplicate cancellation and restore stock only
+    // when this request successfully changes the order status.
+    const cancelledOrder = await Order.findOneAndUpdate(
+      {
+        _id: orderId,
+        buyerId,
+        status: { $nin: [
+          "Cancelled", "Canceled", "Delivered", "Success",
+          "Completed", "Shipped", "Dispatched",
+        ] },
+        deliveryStatus: { $nin: [
+          "cancelled", "delivered", "picked_up", "in_transit",
+        ] },
+      },
+      {
+        $set: {
+          status: "Cancelled",
+          deliveryStatus: "cancelled",
+          cancellationReason: String(reason).slice(0, 500),
+          cancelledAt: new Date(),
+        },
+      },
+      { new: true }
+    );
+
+    if (!cancelledOrder) {
+      return res.status(409).json({
+        message: "Order status changed or the order was already cancelled.",
+      });
+    }
+
+    // Restore inventory for this order.
+    // If restoration fails, log it for reconciliation.
+    try {
+      for (const item of cancelledOrder.items || []) {
+        const quantity = Number(item.quantity || 0);
+
+        if (
+          !item.productId ||
+          !mongoose.Types.ObjectId.isValid(String(item.productId)) ||
+          !Number.isInteger(quantity) ||
+          quantity <= 0
+        ) {
+          throw new Error("Invalid order item; inventory needs review.");
+        }
+
+        const restoredProduct = await Product.findByIdAndUpdate(
+          item.productId,
+          {
+            $inc: {
+              stock: quantity,
+              ordersCount: -quantity,
+            },
+          },
+          { new: true }
+        );
+
+        if (!restoredProduct) {
+          throw new Error(
+            `Product ${item.productId} not found during stock restoration.`
+          );
+        }
+      }
+    } catch (inventoryError) {
+      console.error(
+        "Order cancelled, but inventory restoration needs reconciliation:",
+        orderId,
+        inventoryError
+      );
+
+      return res.status(500).json({
+        message:
+          "Order was cancelled, but inventory restoration needs administrator attention.",
+        orderCancelled: true,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Order cancelled successfully.",
+      order: cancelledOrder,
+    });
+  } catch (error) {
+    console.error("Cancel order error:", error);
+
+    return res.status(500).json({
+      message: "Server error while cancelling the order.",
+    });
+  }
+});
+
+
+/* ============================================================
+   POST: SUBMIT A RETURN REQUEST
+   URL: /api/products/orders/return-request
+   ============================================================ */
+
+router.post("/orders/return-request", async (req, res) => {
+  try {
+    const {
+      buyerId,
+      orderId,
+      items,
+      reason,
+      details = "",
+    } = req.body;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(buyerId || "") ||
+      !mongoose.Types.ObjectId.isValid(orderId || "")
+    ) {
+      return res.status(400).json({
+        message: "Valid buyer ID and order ID are required.",
+      });
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        message: "Select at least one item to return.",
+      });
+    }
+
+    const allowedReasons = [
+      "Item is damaged or defective",
+      "Wrong item received",
+      "Item is missing parts or accessories",
+      "Item does not match the description",
+      "Size or fit issue",
+      "Changed my mind",
+      "Other",
+    ];
+
+    if (!allowedReasons.includes(reason)) {
+      return res.status(400).json({
+        message: "Invalid return reason.",
+      });
+    }
+
+    if (typeof details !== "string" || details.length > 1000) {
+      return res.status(400).json({
+        message: "Additional details cannot exceed 1000 characters.",
+      });
+    }
+
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    if (String(order.buyerId) !== String(buyerId)) {
+      return res.status(403).json({
+        message: "You cannot return items from another buyer's order.",
+      });
+    }
+
+    if (String(order.status || "").toLowerCase() !== "delivered") {
+      return res.status(400).json({
+        message: "Returns are available only after delivery.",
+      });
+    }
+
+    const deliveredDate =
+      order.deliveredAt || order.updatedAt || order.DTD;
+
+    const deliveredAt = deliveredDate
+      ? new Date(deliveredDate)
+      : null;
+
+    if (!deliveredAt || Number.isNaN(deliveredAt.getTime())) {
+      return res.status(400).json({
+        message: "A valid delivery date is required to verify eligibility.",
+      });
+    }
+
+    const age = Date.now() - deliveredAt.getTime();
+    const sevenDays = 7 * 24 * 60 * 60 * 1000;
+
+    if (age < 0 || age > sevenDays) {
+      return res.status(400).json({
+        message:
+          age < 0
+            ? "The delivery date is in the future."
+            : "The 7-day return window has ended.",
+      });
+    }
+
+    const existingRequest = await ReturnRequest.findOne({
+      buyerId,
+      orderId,
+    });
+
+    if (existingRequest) {
+      return res.status(409).json({
+        message: "A return request already exists for this order.",
+        returnRequest: existingRequest,
+      });
+    }
+
+    // Validate product IDs, quantities and prices against the order.
+    const usedLines = new Set();
+    const verifiedItems = [];
+
+    for (const requestedItem of items) {
+      const quantity = Number(requestedItem.quantity);
+      const productId = String(requestedItem.productId || "");
+
+      if (
+        !mongoose.Types.ObjectId.isValid(productId) ||
+        !Number.isInteger(quantity) ||
+        quantity < 1
+      ) {
+        return res.status(400).json({
+          message: "Invalid return product or quantity.",
+        });
+      }
+
+      const itemIndex = (order.items || []).findIndex(
+        (original, index) =>
+          !usedLines.has(index) &&
+          String(original.productId || "") === productId
+      );
+
+      if (itemIndex === -1) {
+        return res.status(400).json({
+          message: "A selected product does not belong to this order.",
+        });
+      }
+
+      const originalItem = order.items[itemIndex];
+
+      if (quantity > Number(originalItem.quantity || 0)) {
+        return res.status(400).json({
+          message: `Return quantity exceeds the purchased quantity for ${
+            originalItem.name || "this product"
+          }.`,
+        });
+      }
+
+      const unitPrice = Number(
+        originalItem.dealPricePaid ?? originalItem.price ?? 0
+      );
+
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        return res.status(400).json({
+          message: "Unable to verify the original product price.",
+        });
+      }
+
+      usedLines.add(itemIndex);
+
+      verifiedItems.push({
+        productId: originalItem.productId,
+        name: originalItem.name || "Product",
+        quantity,
+        unitPrice,
+      });
+    }
+
+    // Never trust a refund amount calculated by the frontend.
+    const requestedRefundAmount = verifiedItems.reduce(
+      (total, item) => total + item.unitPrice * item.quantity,
+      0
+    );
+
+    const returnRequest = await ReturnRequest.create({
+      buyerId,
+      orderId,
+      orderNumber: String(
+        order.orderId || order.orderNumber || order._id
+      ),
+      items: verifiedItems,
+      reason,
+      details: details.trim(),
+      requestedRefundAmount,
+      status: "pending",
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Your return request has been submitted successfully.",
+      returnRequest,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "A return request already exists for this order.",
+      });
+    }
+
+    console.error("Submit return request error:", error);
+
+    return res.status(500).json({
+      message: "Server error while submitting the return request.",
+    });
+  }
+});
+
+
+/* ============================================================
+   GET: VIEW A BUYER'S RETURN REQUESTS
+   URL: /api/products/orders/return-requests/buyer/:buyerId
+   ============================================================ */
+
+router.get(
+  "/orders/return-requests/buyer/:buyerId",
+  async (req, res) => {
+    try {
+      const { buyerId } = req.params;
+
+      if (!mongoose.Types.ObjectId.isValid(buyerId)) {
+        return res.status(400).json({
+          message: "Invalid buyer ID.",
+        });
+      }
+
+      const requests = await ReturnRequest.find({ buyerId })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      return res.status(200).json(requests);
+    } catch (error) {
+      console.error("Get return requests error:", error);
+
+      return res.status(500).json({
+        message: "Unable to load return requests.",
+      });
+    }
+  }
+);
+
+
 export default router;

@@ -25,17 +25,36 @@ const orderSchema = new mongoose.Schema({
   default: null,
   index: true,
 },
-  deliveryPartnerId: {
+cancellationReason: {
   type: String,
   default: "",
-  index: true,
+  maxlength: 500,
 },
-deliveryPartnerStatus: {
+cancelledAt: {
+  type: Date,
+  default: "",
+},
+deliveryPartnerId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "DeliveryPartner",
+  default: "",
+},
+deliveryAssignedAt: {
+  type: Date,
+  default: "",
+},
+deliveryStatus: {
   type: String,
-  enum: ["assigned", "accepted", "picked_up", "delivered"],
-  default: "assigned",
+  enum: [
+    "unassigned",
+    "assigned",
+    "picked_up",
+    "in_transit",
+    "delivered",
+    "cancelled",
+  ],
+  default: "unassigned",
 },
- deliveredAt: { type: Date, default: null },
 }, { timestamps: true });
 
 
