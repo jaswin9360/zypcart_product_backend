@@ -6,6 +6,9 @@ import { connectDB } from './config/db.js';
 import cartRoutes from './routes/cartRoutes.js';
 import contactRoutes from './routes/contact.js'
 import productRoutes from './routes/product.routes.js';
+import deliveryAuthRoutes from "./routes/deliveryAuth.js";
+import deliveryRoutes from "./routes/delivery.js";
+import adminDeliveryRoutes from "./routes/adminDelivery.js";
 import deliveryApplications from './routes/deliveryApplications.js'
 import dns from "dns"
 dns.setServers(['1.1.1.1','8.8.8.8'])
@@ -47,6 +50,11 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/delivery', deliveryApplications);
+app.use("/api/delivery/auth", deliveryAuthRoutes);
+app.use("/api/delivery", deliveryRoutes);
+
+// Protect this router with your real admin authorization middleware.
+app.use("/api/admin/delivery-partners", requireAdmin, adminDeliveryRoutes);
 // Health diagnostics check
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
