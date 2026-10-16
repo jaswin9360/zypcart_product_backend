@@ -10,6 +10,7 @@ import deliveryApplications from "./routes/deliveryApplications.js";
 import adminDeliveryApplications from "./routes/adminDeliveryApplications.js";
 import deliveryPartnerRoutes from "./routes/deliveryPartner.js";
 import adminDelivery from "./routes/adminDelivery.js";
+import deliveryAuthRoutes from "./routes/deliveryAuth.js";
 import { auth, requireAdmin } from "./middleware/deliveryAuth.js";
 
 import dns from "dns"
@@ -52,6 +53,7 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/contact', contactRoutes);
 
+app.use("/api/delivery/auth", deliveryAuthRoutes);
 app.use("/api/delivery", deliveryApplications);
 app.use("/api/delivery/admin", adminDeliveryApplications);
 app.use("/api/delivery/partner", deliveryPartnerRoutes);
