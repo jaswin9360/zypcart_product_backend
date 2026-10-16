@@ -1,138 +1,50 @@
-import express from "express";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import User from "../models/User.js";
-import DeliveryPartner from "../models/DeliveryPartner.js";
+import express from 'express';
+import multer from 'multer';
+import rateLimit from 'express-rate-limit';
+import path from 'path';
+import fs from 'fs';
+import DeliveryApplication from '../models/DeliveryApplication.js';
+import { auth, requireDeliveryPartner } from '../middleware/deliveryAuth.js';
 
 const router = express.Router();
-
-const createToken = (user) =>
-  jwt.sign(
-    { id: user._id.toString(), role: user.role },
-    process.env.JWT_SECRET,
-    { expiresIn: "1d" }
-  );
-
-router.post("/register", async (req, res) => {
-  try {
-    const {
-      fullName,
-      email,
-      password,
-      phone,
-      city,
-      address,
-      pincode,
-      vehicleType,
-      licenseNumber,
-      experience,
-      availability,
-    } = req.body;
-
-    if (
-      !fullName ||
-      !email ||
-      !password ||
-      !phone ||
-      !city ||
-      !address ||
-      !pincode
-    ) {
-      return res.status(400).json({
-        message: "Please fill in all required fields.",
-      });
-    }
-
-    if (password.length < 8) {
-      return res.status(400).json({
-        message: "Password must contain at least 8 characters.",
-      });
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-
-    if (await User.findOne({ email: normalizedEmail })) {
-      return res.status(409).json({
-        message: "Email already registered.",
-      });
-    }
-
-    const user = await User.create({
-      name: fullName.trim(),
-      email: normalizedEmail,
-      password: await bcrypt.hash(password, 12),
-      role: "delivery_partner",
-    });
-
-    try {
-      await DeliveryPartner.create({
-        user: user._id,
-        fullName,
-        email: normalizedEmail,
-        phone,
-        city,
-        address,
-        pincode,
-        vehicleType,
-        licenseNumber,
-        experience,
-        availability,
-        status: "pending",
-      });
-    } catch (error) {
-      await User.findByIdAndDelete(user._id);
-      throw error;
-    }
-
-    return res.status(201).json({
-      message: "Registration successful. Await admin approval.",
-      token: createToken(user),
-      status: "pending",
-    });
-  } catch (error) {
-    console.error("Delivery registration:", error.message);
-
-    res.status(500).json({
-      message: "Registration failed.",
-    });
-  }
+const uploadDir = path.join(process.cwd(), 'private-uploads', 'delivery');
+fs.mkdirSync(uploadDir, { recursive: true });
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadDir),
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(file.originalname).toLowerCase()}`),
 });
-
-router.post("/login", async (req, res) => {
-  try {
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const password = String(req.body.password || "");
-
-    const user = await User.findOne({ email });
-
-    if (
-      !user ||
-      user.role !== "delivery_partner" ||
-      !(await bcrypt.compare(password, user.password))
-    ) {
-      return res.status(401).json({
-        message: "Invalid delivery partner credentials.",
-      });
-    }
-
-    const partner = await DeliveryPartner.findOne({
-      user: user._id,
-    });
-
-    if (!partner) {
-      return res.status(403).json({
-        message: "Delivery application not found.",
-      });
-    }
-
-    return res.json({
-      token: createToken(user),
-      status: partner.status,
-      message: "Login successful.",
-    });
-  } catch {
-    res.status(500).json({ message: "Login failed." });
-  }
+const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'application/pdf']);
+const upload = multer({
+  storage,
+  limits: { files: 3, fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => allowedMimeTypes.has(file.mimetype) ? cb(null, true) : cb(new Error('Only JPG, PNG, and PDF files are allowed.')),
 });
+const applicationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false });
+const asyncHandler = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+
+// Partner must register/log in before submitting an application.
+router.post('/apply', auth, requireDeliveryPartner, applicationLimiter, upload.array('documents', 3), asyncHandler(async (req, res) => {
+  const { fullName, email, phone, city, address, pincode, vehicleType, licenseNumber, experience, availability, message } = req.body;
+  if (![fullName, email, phone, city, address, pincode, vehicleType].every((v) => String(v || '').trim())) {
+    for (const file of req.files || []) fs.promises.unlink(file.path).catch(() => {});
+    return res.status(400).json({ success: false, message: 'Please complete all required fields.' });
+  }
+  const existing = await DeliveryApplication.findOne({ user: req.user._id });
+  if (existing && existing.status !== 'Rejected') {
+    for (const file of req.files || []) fs.promises.unlink(file.path).catch(() => {});
+    return res.status(409).json({ success: false, message: 'You already have an application. Check your application status.' });
+  }
+  const documents = (req.files || []).map((file) => ({ filename: file.filename, originalName: path.basename(file.originalname), mimetype: file.mimetype, path: file.path }));
+  const values = {
+    user: req.user._id, fullName: String(fullName).trim(), email: String(email).trim().toLowerCase(), phone: String(phone).trim(),
+    city: String(city).trim(), address: String(address).trim(), pincode: String(pincode).trim(), vehicleType,
+    licenseNumber: String(licenseNumber || '').trim(), experience: String(experience || ''), availability: String(availability || ''),
+    message: String(message || '').trim(), documents, status: 'Pending', reviewNote: '', reviewedAt: null, reviewedBy: null,
+  };
+  const application = existing
+    ? await DeliveryApplication.findByIdAndUpdate(existing._id, { $set: values }, { new: true, runValidators: true })
+    : await DeliveryApplication.create(values);
+  res.status(201).json({ success: true, message: 'Application submitted and pending review.', application: { id: application._id, status: application.status } });
+})) ;
 
 export default router;

@@ -1,54 +1,34 @@
-import jwt from "jsonwebtoken";
-import DeliveryPartner from "../models/DeliveryPartner.js";
+import jwt from 'jsonwebtoken';
+import User from '../models/User.js'; // Change this path to your existing User model.
 
-export const requireLogin = (req, res, next) => {
+export async function auth(req, res, next) {
   try {
-    const header = req.headers.authorization || "";
-    const token = header.startsWith("Bearer ")
-      ? header.slice(7)
-      : null;
-
-    if (!token) {
-      return res.status(401).json({
-        message: "Please log in to continue.",
-      });
-    }
-
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (!token) return res.status(401).json({ success: false, message: 'Please log in.' });
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    if (decoded.role !== "delivery_partner") {
-      return res.status(403).json({
-        message: "Delivery partner access only.",
-      });
-    }
-
-    req.deliveryUser = decoded;
+    const user = await User.findById(decoded.sub).select('_id name email role');
+    if (!user) return res.status(401).json({ success: false, message: 'Account not found.' });
+    req.user = user;
     next();
-  } catch {
-    return res.status(401).json({
-      message: "Invalid or expired session.",
-    });
-  }
-};
-
-export const requireApprovedPartner = async (req, res, next) => {
-  try {
-    const partner = await DeliveryPartner.findOne({
-      user: req.deliveryUser.id,
-      status: "approved",
-    });
-
-    if (!partner) {
-      return res.status(403).json({
-        message: "Your application is not approved yet.",
-      });
+  } catch (error) {
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
     }
-
-    req.partner = partner;
-    next();
-  } catch {
-    res.status(500).json({
-      message: "Unable to verify partner approval.",
-    });
+    next(error);
   }
-};
+}
+
+export function requireDeliveryPartner(req, res, next) {
+  if (req.user?.role !== 'delivery_partner') {
+    return res.status(403).json({ success: false, message: 'Delivery partner account required.' });
+  }
+  next();
+}
+
+export function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Administrator access required.' });
+  }
+  next();
+}

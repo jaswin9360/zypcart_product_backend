@@ -1,68 +1,25 @@
-import DeliveryPartner from "../models/DeliveryPartner.js";
-import Order from "../models/Order.js";
+import DeliveryPartner from '../models/DeliveryPartner.js';
+import Order from '../models/Order.js'; // Change this path to your existing Order model.
 
-export default async function assignDeliveryPartner(order) {
-  const address = order.shippingAddress || order.deliveryAddress || {};
+export default async function assignDeliveryPartner(orderId) {
+  const order = await Order.findById(orderId);
+  if (!order || order.deliveryPartner || order.deliveryStatus === 'delivered') return order;
+  const address = order.deliveryAddress || order.shippingAddress || {};
+  const pincode = String(address.pincode || address.postalCode || address.zipCode || '').trim();
+  const city = String(address.city || '').trim();
+  const locationQuery = { status: 'approved', isAvailable: true };
+  if (pincode) locationQuery.pincode = pincode;
+  else if (city) locationQuery.city = new RegExp(`^${city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+  else return order;
 
-  const pincode = String(
-    address.pincode || address.postalCode || ""
-  ).trim();
-
-  if (!pincode) return null;
-
-  const candidates = await DeliveryPartner.find({
-    pincode,
-    status: "approved",
-    isAvailable: true,
-  }).lean();
-
-  if (!candidates.length) return null;
-
-  const workloads = await Order.aggregate([
-    {
-      $match: {
-        deliveryPartner: {
-          $in: candidates.map((partner) => partner._id),
-        },
-        deliveryStatus: { $in: ["assigned", "picked_up"] },
-      },
-    },
-    {
-      $group: {
-        _id: "$deliveryPartner",
-        count: { $sum: 1 },
-      },
-    },
-  ]);
-
-  const workloadMap = new Map(
-    workloads.map((item) => [String(item._id), item.count])
-  );
-
-  candidates.sort(
-    (a, b) =>
-      (workloadMap.get(String(a._id)) || 0) -
-      (workloadMap.get(String(b._id)) || 0)
-  );
-
-  // Atomically assign only if the order is still unassigned.
-  const selected = candidates[0];
-
-  return Order.findOneAndUpdate(
-    {
-      _id: order._id,
-      deliveryStatus: "unassigned",
-      $or: [
-        { deliveryPartner: null },
-        { deliveryPartner: { $exists: false } },
-      ],
-    },
-    {
-      $set: {
-        deliveryPartner: selected._id,
-        deliveryStatus: "assigned",
-      },
-    },
+  const candidates = await DeliveryPartner.find(locationQuery).sort({ activeDeliveries: 1, createdAt: 1 }).limit(10);
+  if (!candidates.length) return order;
+  // Re-check order before assigning to reduce duplicate assignment races.
+  const updated = await Order.findOneAndUpdate(
+    { _id: order._id, deliveryPartner: null, deliveryStatus: 'unassigned' },
+    { $set: { deliveryPartner: candidates[0]._id, deliveryStatus: 'assigned' } },
     { new: true }
   );
+  if (updated) await DeliveryPartner.updateOne({ _id: candidates[0]._id }, { $inc: { activeDeliveries: 1 } });
+  return updated || Order.findById(orderId);
 }
