@@ -27,7 +27,7 @@ const orderSchema = new mongoose.Schema({
 },
   deliveryPartnerId: {
   type: String,
-  default: null,
+  default: "",
   index: true,
 },
 deliveryPartnerStatus: {

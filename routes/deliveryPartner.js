@@ -8,7 +8,6 @@ router.use(auth, requireDeliveryPartner);
 
 async function getApprovedPartner(req, res) {
   const partner = await DeliveryPartner.findById(req.user._id);
-  console.log(partner)
   if (!partner || partner.status !== 'approved') {
     res.status(403).json({ success: false, message: 'Your application must be approved before accessing delivery orders.' });
     return null;
@@ -20,6 +19,7 @@ router.get('/orders', async (req, res, next) => {
   try {
     const partner = await getApprovedPartner(req, res);
     if (!partner) return;
+    console.log(partner._id)
     const orders = await Order.find({
       deliveryPartnerId: String(partner._id),
       deliveryPartnerStatus: { $in: ['assigned', 'accepted', 'picked_up'] },
