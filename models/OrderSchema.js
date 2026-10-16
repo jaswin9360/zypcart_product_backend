@@ -25,7 +25,7 @@ const orderSchema = new mongoose.Schema({
   default: null,
   index: true,
 },
-deliveryPartnerId: {
+  deliveryPartnerId: {
   type: String,
   default: null,
   index: true,
@@ -35,6 +35,8 @@ deliveryPartnerStatus: {
   enum: ["assigned", "accepted", "picked_up", "delivered"],
   default: "assigned",
 },
+ deliveredAt: { type: Date, default: null },
 }, { timestamps: true });
+
 
 export const Order = mongoose.model('Order', orderSchema);

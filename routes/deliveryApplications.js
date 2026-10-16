@@ -29,14 +29,14 @@ router.post('/apply', auth, requireDeliveryPartner, applicationLimiter, upload.a
     for (const file of req.files || []) fs.promises.unlink(file.path).catch(() => {});
     return res.status(400).json({ success: false, message: 'Please complete all required fields.' });
   }
-  const existing = await DeliveryApplication.findOne({ user: req.user._id });
+  const existing = await DeliveryApplication.findOne({ userId: req.user._id });
   if (existing && existing.status !== 'Rejected') {
     for (const file of req.files || []) fs.promises.unlink(file.path).catch(() => {});
     return res.status(409).json({ success: false, message: 'You already have an application. Check your application status.' });
   }
   const documents = (req.files || []).map((file) => ({ filename: file.filename, originalName: path.basename(file.originalname), mimetype: file.mimetype, path: file.path }));
   const values = {
-    user: req.user._id, fullName: String(fullName).trim(), email: String(email).trim().toLowerCase(), phone: String(phone).trim(),
+    userId: req.user._id, fullName: String(fullName).trim(), email: String(email).trim().toLowerCase(), phone: String(phone).trim(),
     city: String(city).trim(), address: String(address).trim(), pincode: String(pincode).trim(), vehicleType,
     licenseNumber: String(licenseNumber || '').trim(), experience: String(experience || ''), availability: String(availability || ''),
     message: String(message || '').trim(), documents, status: 'Pending', reviewNote: '', reviewedAt: null, reviewedBy: null,
@@ -44,7 +44,8 @@ router.post('/apply', auth, requireDeliveryPartner, applicationLimiter, upload.a
   const application = existing
     ? await DeliveryApplication.findByIdAndUpdate(existing._id, { $set: values }, { new: true, runValidators: true })
     : await DeliveryApplication.create(values);
-  res.status(201).json({ success: true, message: 'Application submitted and pending review.', application: { id: application._id, status: application.status } });
+  await (await import('../models/DeliveryPartner.js')).default.findByIdAndUpdate(req.user._id, { $set: { name: String(fullName).trim(), status: 'pending', application: application._id, phone: String(phone).trim(), city: String(city).trim(), address: String(address).trim(), pincode: String(pincode).trim(), vehicleType, isAvailable: false } });
+  res.status(201).json({ success: true, message: 'Application submitted and pending review.', application: { _id: application._id, id: application._id, status: application.status, createdAt: application.createdAt } });
 })) ;
 
 export default router;
