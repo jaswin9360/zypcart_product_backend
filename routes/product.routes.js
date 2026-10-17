@@ -854,4 +854,78 @@ router.get('/orders/return-requests/buyer/:buyerId', async (req, res) => {
   }
 });
 
+
+
+/* ============================================================
+   PUT: Update order status
+   URL: /api/products/orders/status/:orderId
+   ============================================================ */
+
+router.put('/orders/status/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { status, deliveryStatus } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid order ID.',
+      });
+    }
+
+    if (status === undefined && deliveryStatus === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide status or deliveryStatus.',
+      });
+    }
+
+    const updates = {};
+
+    if (status !== undefined) {
+      updates.status = status;
+    }
+
+    if (deliveryStatus !== undefined) {
+      updates.deliveryStatus = deliveryStatus;
+    }
+
+    // Record delivery time when the order is marked as delivered.
+    const normalizedStatus = String(
+      deliveryStatus ?? status ?? ''
+    ).toLowerCase().replace(/[_-]/g, ' ').trim();
+
+    if (['delivered', 'success', 'completed'].includes(normalizedStatus)) {
+      updates.deliveredAt = new Date();
+    }
+
+    const updatedOrder = await Order.findByIdAndUpdate(
+      orderId,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Order status updated successfully.',
+      order: updatedOrder,
+    });
+  } catch (error) {
+    console.error('Update order status error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update order status.',
+    });
+  }
+});
+
+
 export default router;
