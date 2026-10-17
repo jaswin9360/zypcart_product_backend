@@ -51,7 +51,7 @@ deliveryStatus: {
     "picked_up",
     "in_transit",
     "delivered",
-    "cancelled",
+     'Cancelled',
   ],
   default: "unassigned",
 },

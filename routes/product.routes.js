@@ -856,76 +856,144 @@ router.get('/orders/return-requests/buyer/:buyerId', async (req, res) => {
 
 
 
-/* ============================================================
-   PUT: Update order status
-   URL: /api/products/orders/status/:orderId
-   ============================================================ */
-
 router.put('/orders/status/:orderId', async (req, res) => {
   try {
     const { orderId } = req.params;
     const { status, deliveryStatus } = req.body;
 
+    // Validate order ID
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid order ID.',
+        message: 'Invalid order ID.'
       });
     }
 
+    // Require at least one status field
     if (status === undefined && deliveryStatus === undefined) {
       return res.status(400).json({
         success: false,
-        message: 'Provide status or deliveryStatus.',
+        message: 'Provide status or deliveryStatus.'
       });
     }
 
     const updates = {};
 
+    // Validate the order status against the actual schema enum
     if (status !== undefined) {
+      if (typeof status !== 'string') {
+        return res.status(400).json({
+          success: false,
+          message: 'Status must be a string.'
+        });
+      }
+
+      const allowedStatuses =
+        Order.schema.path('status')?.enumValues ?? [];
+
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid order status.',
+          allowedStatuses
+        });
+      }
+
       updates.status = status;
     }
 
+    // Validate deliveryStatus only if this field exists in your schema
     if (deliveryStatus !== undefined) {
+      if (typeof deliveryStatus !== 'string') {
+        return res.status(400).json({
+          success: false,
+          message: 'Delivery status must be a string.'
+        });
+      }
+
+      const deliveryStatusPath =
+        Order.schema.path('deliveryStatus');
+
+      if (!deliveryStatusPath) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'deliveryStatus is not defined in the Order schema.'
+        });
+      }
+
+      const allowedDeliveryStatuses =
+        deliveryStatusPath.enumValues ?? [];
+
+      if (
+        allowedDeliveryStatuses.length > 0 &&
+        !allowedDeliveryStatuses.includes(deliveryStatus)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid delivery status.',
+          allowedDeliveryStatuses
+        });
+      }
+
       updates.deliveryStatus = deliveryStatus;
     }
 
-    // Record delivery time when the order is marked as delivered.
-    const normalizedStatus = String(
-      deliveryStatus ?? status ?? ''
-    ).toLowerCase().replace(/[_-]/g, ' ').trim();
+    // Record the delivery time only for a confirmed delivered state
+    const deliveredValues = ['Delivered', 'delivered'];
 
-    if (['delivered', 'success', 'completed'].includes(normalizedStatus)) {
-      updates.deliveredAt = new Date();
+    if (
+      (updates.status &&
+        deliveredValues.includes(updates.status)) ||
+      (updates.deliveryStatus &&
+        deliveredValues.includes(updates.deliveryStatus))
+    ) {
+      if (Order.schema.path('deliveredAt')) {
+        updates.deliveredAt = new Date();
+      }
     }
 
     const updatedOrder = await Order.findByIdAndUpdate(
       orderId,
       { $set: updates },
-      { new: true, runValidators: true }
+      {
+        returnDocument: 'after',
+        runValidators: true
+      }
     );
 
     if (!updatedOrder) {
       return res.status(404).json({
         success: false,
-        message: 'Order not found.',
+        message: 'Order not found.'
       });
     }
 
     return res.status(200).json({
       success: true,
       message: 'Order status updated successfully.',
-      order: updatedOrder,
+      order: updatedOrder
     });
   } catch (error) {
     console.error('Update order status error:', error);
 
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Order validation failed.',
+        errors: Object.values(error.errors).map(
+          (item) => item.message
+        )
+      });
+    }
+
     return res.status(500).json({
       success: false,
-      message: 'Failed to update order status.',
+      message: 'Failed to update order status.'
     });
   }
 });
+
 
 
 export default router;
