@@ -36,8 +36,8 @@ cancelledAt: {
 },
 deliveryPartnerId: {
   type: mongoose.Schema.Types.ObjectId,
-  ref: "DeliveryPartner",
-  default: "",
+  ref: 'DeliveryPartner',
+  default: null,
 },
 deliveryAssignedAt: {
   type: Date,
