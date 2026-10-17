@@ -1,413 +1,571 @@
+
 import express from 'express';
 import mongoose from 'mongoose';
-import cron from "node-cron";
+import cron from 'node-cron';
+
 import { Order } from '../models/OrderSchema.js';
 import { CartItem } from '../models/CartSchema.js';
 import { Product } from '../models/schema.js';
 import { Coupon } from '../models/Coupon.js';
+import ReturnRequest from '../models/ReturnRequest.js';
 
 const router = express.Router();
 
+const INVENTORY_LIMIT = 10;
+const RETURN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+const isValidObjectId = (id) =>
+  mongoose.Types.ObjectId.isValid(String(id || ''));
+
+const normalizeStatus = (status) =>
+  String(status || '').toLowerCase().replace(/[_-]/g, ' ').trim();
+
+const DELIVERED_STATUSES = [
+  'delivered',
+  'success',
+  'completed',
+];
+
+const RETURN_REASONS = [
+  'Item is damaged or defective',
+  'Wrong item received',
+  'Item is missing parts or accessories',
+  'Item does not match the description',
+  'Size or fit issue',
+  'Changed my mind',
+  'Other',
+];
+
+// ============================================================
+// GET: Marketplace products
+// GET /api/products/marketplace
+// ============================================================
+
 router.get('/marketplace', async (req, res) => {
   try {
-    // Streams back only active listings to the buyer's gallery
-    const catalog = await Product.find({ status: 'Active' });
-    return res.status(200).json(catalog);
-  } catch (err) {
-    console.error("Error retrieving global marketplace data:", err);
-    return res.status(500).json({ message: 'Error retrieving global marketplace data matrix.' });
+    const products = await Product.find({ status: 'Active' }).lean();
+    return res.status(200).json(products);
+  } catch (error) {
+    console.error('Marketplace error:', error);
+    return res.status(500).json({
+      message: 'Failed to load marketplace products.',
+    });
   }
 });
 
-// ==================================================================
-// 2. GET: Specific Seller Dashboard Collection via User ID
-// URL: http://localhost:5601/api/products/user-dashboard/:userId
-// ==================================================================
+// ============================================================
+// GET: Products belonging to a seller
+// GET /api/products/user-dashboard/:userId
+// ============================================================
+
 router.get('/user-dashboard/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const userProducts = await Product.find({ userId });
-    return res.status(200).json(userProducts);
-  } catch (err) {
-    console.error("Error retrieving user collection telemetry metrics:", err);
-    return res.status(500).json({ message: 'Error retrieving user collection telemetry metrics.' });
+
+    if (!isValidObjectId(userId)) {
+      return res.status(400).json({ message: 'Invalid seller ID.' });
+    }
+
+    const products = await Product.find({ userId }).sort({ createdAt: -1 });
+    return res.status(200).json(products);
+  } catch (error) {
+    console.error('Seller products error:', error);
+    return res.status(500).json({
+      message: 'Failed to load seller products.',
+    });
   }
 });
 
-// ==================================================================
-// 3. POST: Deploy and Store New Catalog Product Entry Node
-// URL: http://localhost:5601/api/products
-// ==================================================================
+// ============================================================
+// POST: Create product with a maximum of 10 products per seller
+// POST /api/products
+// ============================================================
+
 router.post('/', async (req, res) => {
   try {
     const {
-      name, mrpPrice, discountPrice, transactionType, imageUrls,sellerName, stock, userId,
-      discountReason, category, specifications
-    } = req.body;
-
-    // Core Field Validation Guard
-    if (!name || !mrpPrice || !discountPrice || !userId) {
-      return res.status(400).json({ message: 'Required fields missing: name, mrpPrice, discountPrice, userId' });
-    }
-
-    const newProduct = new Product({
       name,
-      category: category || 'Electronics',
       mrpPrice,
       discountPrice,
+      transactionType,
+      imageUrls,
+      sellerName,
+      stock,
+      userId,
+      discountReason,
+      category,
+      specifications,
+    } = req.body;
+
+    if (
+      !name ||
+      mrpPrice === undefined ||
+      discountPrice === undefined ||
+      !userId
+    ) {
+      return res.status(400).json({
+        message: 'name, mrpPrice, discountPrice and userId are required.',
+      });
+    }
+
+    if (!isValidObjectId(userId)) {
+      return res.status(400).json({ message: 'Invalid seller ID.' });
+    }
+
+    const parsedMrp = Number(mrpPrice);
+    const parsedDiscount = Number(discountPrice);
+    const parsedStock = Number(stock ?? 0);
+
+    if (
+      !Number.isFinite(parsedMrp) ||
+      !Number.isFinite(parsedDiscount) ||
+      parsedMrp < 0 ||
+      parsedDiscount < 0 ||
+      parsedDiscount > parsedMrp
+    ) {
+      return res.status(400).json({
+        message: 'Enter valid prices. Discount price cannot exceed MRP.',
+      });
+    }
+
+    if (!Number.isInteger(parsedStock) || parsedStock < 0) {
+      return res.status(400).json({
+        message: 'Stock must be a non-negative whole number.',
+      });
+    }
+
+    const existingCount = await Product.countDocuments({ userId });
+
+    if (existingCount >= INVENTORY_LIMIT) {
+      return res.status(400).json({
+        message: 'Inventory limit reached. A seller can add up to 10 products.',
+      });
+    }
+
+    const product = new Product({
+      name: name.trim(),
+      category: category || 'Electronics',
+      mrpPrice: parsedMrp,
+      discountPrice: parsedDiscount,
       transactionType: transactionType || 'sell',
-      imageUrls: imageUrls || [],
-      stock: stock,
+      imageUrls: Array.isArray(imageUrls) ? imageUrls : [],
+      stock: parsedStock,
       userId,
       sellerName,
-      discountReason: discountReason || "",
-      // Saves the array of custom user specifications [{ key, value }] straight to MongoDB
-      specifications: specifications || []
+      discountReason: discountReason || '',
+      specifications: Array.isArray(specifications) ? specifications : [],
+      createdAt: new Date(),
     });
 
-    await newProduct.save();
-    return res.status(201).json(newProduct);
-  } catch (err) {
-    console.error("Rejection error processing database payload save:", err);
-    return res.status(500).json({ message: 'Failed to deploy product database node payload configuration.' });
+    await product.save();
+
+    return res.status(201).json(product);
+  } catch (error) {
+    console.error('Create product error:', error);
+    return res.status(500).json({
+      message: 'Failed to create product.',
+    });
   }
 });
 
-// ==================================================================
-// 4. PUT: Modify Properties of Existing Product Node Target
-// URL: http://localhost:5601/api/products/:id
-// ==================================================================
-router.put('/:id', async (req, res) => {
-  const targetId = req.params.id;
+// ============================================================
+// PUT: Update product
+// PUT /api/products/:id
+// ============================================================
 
+router.put('/:id', async (req, res) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(targetId)) {
-      return res.status(400).json({ message: 'Invalid product tracking parameter ID format configuration.' });
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: 'Invalid product ID.' });
     }
 
-    // Handles any update changes to the specifications array or promotional override values dynamically
     const updatedProduct = await Product.findByIdAndUpdate(
-      targetId,
+      id,
       { $set: req.body },
       { new: true, runValidators: true }
     );
 
     if (!updatedProduct) {
-      return res.status(404).json({ message: 'Target product registry reference context parameters not found.' });
+      return res.status(404).json({ message: 'Product not found.' });
     }
 
     return res.status(200).json(updatedProduct);
   } catch (error) {
-    console.error("Error updating tracking data matrix parameters:", error);
-    return res.status(500).json({ message: 'Internal Server Error saving structural data shifts.' });
+    console.error('Update product error:', error);
+    return res.status(500).json({
+      message: 'Failed to update product.',
+    });
   }
 });
 
-// ==================================================================
-// 5. DELETE: Permanent Clearance Execution From Datastore
-// URL: http://localhost:5601/api/products/:id
-// ==================================================================
-router.delete('/:id', async (req, res) => {
-  const productId = req.params.id;
+// ============================================================
+// DELETE: Delete product
+// DELETE /api/products/:id
+// ============================================================
 
+router.delete('/:id', async (req, res) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(productId)) {
-      return res.status(400).json({ message: 'Invalid dynamic clearance path assignment ID format.' });
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: 'Invalid product ID.' });
     }
 
-    const deletedProduct = await Product.findByIdAndDelete(productId);
+    const deletedProduct = await Product.findByIdAndDelete(id);
 
     if (!deletedProduct) {
-      return res.status(404).json({ message: 'Product reference key pointer not found in database registry.' });
+      return res.status(404).json({ message: 'Product not found.' });
     }
 
     return res.status(200).json({
       success: true,
-      message: `Product "${deletedProduct.name}" successfully removed.`
+      message: `Product "${deletedProduct.name}" deleted successfully.`,
     });
   } catch (error) {
-    console.error("Backend pipeline failure during deletion:", error);
-    return res.status(500).json({ message: 'Internal server error executing data array removal pipeline.' });
-  }
-});
-
-
-
-// ==================================================================
-// POST: Deploy and Store New Catalog Product Entry Node (With 10 Items Cap)
-// URL: http://localhost:5601/api/products
-// ==================================================================
-router.post('/', async (req, res) => {
-  try {
-    const { name, mrpPrice, discountPrice, userId } = req.body;
-
-    if (!name || !mrpPrice || !discountPrice || !userId) {
-      return res.status(400).json({ message: 'Required fields missing: name, mrpPrice, discountPrice, userId' });
-    }
-
-    // 🌟 COUNT ENFORCEMENT GUARD RULE: Limit maximum 10 items per unique seller user
-    const existingUserItemsCount = await Product.countDocuments({ userId });
-    if (existingUserItemsCount >= 10) {
-      return res.status(400).json({
-        message: 'Inventory limit reached! A single user registry cannot exceed 10 active database catalog nodes simultaneously.'
-      });
-    }
-
-    const newProduct = new Product({
-      ...req.body,
-      createdAt: new Date() // Sets explicit timestamp marker for accurate TTL down-counting
+    console.error('Delete product error:', error);
+    return res.status(500).json({
+      message: 'Failed to delete product.',
     });
-
-    await newProduct.save();
-    return res.status(201).json(newProduct);
-  } catch (err) {
-    console.error("Payload execution tracking error:", err);
-    return res.status(500).json({ message: 'Failed to deploy product database node.' });
   }
 });
 
+// ============================================================
+// POST: Checkout
+// POST /api/products/orders/checkout
+// ============================================================
 
-// 1. POST: Process Secure Checkout Pipeline Transaction
 router.post('/orders/checkout', async (req, res) => {
   try {
-  
-    const { userId, buyerName, buyerEmail, cartItems, DTD, address ,couponCode,discountApplied,paymentMethods } = req.body;
+    const {
+      userId,
+      buyerName,
+      buyerEmail,
+      cartItems,
+      DTD,
+      address,
+      couponCode,
+      discountApplied,
+      paymentMethods,
+    } = req.body;
 
-    // 1. Basic Validation
-    if (!cartItems || cartItems.length === 0) {
-      return res.status(400).json({ message: 'Cannot process an empty checkout matrix.' });
+    if (!isValidObjectId(userId)) {
+      return res.status(400).json({ message: 'Valid buyer ID is required.' });
     }
 
-    // Optional but recommended: Ensure address exists
+    if (!Array.isArray(cartItems) || cartItems.length === 0) {
+      return res.status(400).json({ message: 'Your cart is empty.' });
+    }
+
     if (!address) {
-      return res.status(400).json({ message: 'Shipping address is required to place an order.' });
+      return res.status(400).json({ message: 'Shipping address is required.' });
     }
 
-    const itemsBySeller = {};
-    cartItems.forEach(item => {
-      const sellerId = item.userId;
-      if (!itemsBySeller[sellerId]) itemsBySeller[sellerId] = [];
-      itemsBySeller[sellerId].push({
-        productId: item._id,
-        name: item.name,
-        quantity: Number(item.quantity),
-        dealPricePaid: Number(item.discountPrice)
-      });
-    });
+    // Group items by seller.
+    const itemsBySeller = new Map();
 
-    for (const sellerId in itemsBySeller) {
-      const vendorItems = itemsBySeller[sellerId];
-      const totalAmountPaid = vendorItems.reduce((sum, i) => sum + (i.dealPricePaid * i.quantity), 0);
+    for (const item of cartItems) {
+      const sellerId = String(item.userId || '');
+      const productId = String(item._id || item.productId || '');
+      const quantity = Number(item.quantity);
 
-      // Decrement stock and Increment ordersCount atomically FIRST
-      for (const item of vendorItems) {
-        const updated = await Product.findOneAndUpdate(
-          { _id: item.productId, stock: { $gte: item.quantity } },
-          { $inc: { ordersCount: item.quantity, stock: -item.quantity } },
-          { returnDocument: 'after' }
-        );
-
-        if (!updated) {
-          // Note: Added status(400) back here so your frontend catch block works properly!
-          return res.status(400).json({
-            message: `Item '${item.name}' is out of stock or does not have enough units available.`
-          });
-        }
+      if (
+        !isValidObjectId(sellerId) ||
+        !isValidObjectId(productId) ||
+        !Number.isInteger(quantity) ||
+        quantity < 1
+      ) {
+        return res.status(400).json({
+          message: 'Cart contains an invalid product, seller, or quantity.',
+        });
       }
 
-      // ONLY save the order AFTER all items have been verified
-      const newOrder = new Order({
-        sellerId,
-        buyerId: userId,
-        buyerName,
-        buyerEmail,
-        address,       // <--- ADDED HERE
-        DTD,           // <--- ADDED HERE
-        items: vendorItems,
-        totalAmountPaid,
-        couponCode,
-        discountApplied,
-        paymentMethods
-      });
+      if (!itemsBySeller.has(sellerId)) {
+        itemsBySeller.set(sellerId, []);
+      }
 
-      await newOrder.save();
-      if (couponCode) {
-            await Coupon.findOneAndUpdate(
-                { code: couponCode.toUpperCase() },
-                { $set: { isRedeemed: true } }
+      itemsBySeller.get(sellerId).push({ productId, quantity });
+    }
+
+    // Validate all products and reserve stock before saving orders.
+    // A database transaction is preferable for full multi-seller atomicity.
+    const reserved = [];
+    const ordersToSave = [];
+
+    try {
+      for (const [sellerId, items] of itemsBySeller.entries()) {
+        const orderItems = [];
+
+        for (const cartItem of items) {
+          const product = await Product.findOneAndUpdate(
+            {
+              _id: cartItem.productId,
+              userId: sellerId,
+              stock: { $gte: cartItem.quantity },
+              status: { $ne: 'Inactive' },
+            },
+            {
+              $inc: {
+                stock: -cartItem.quantity,
+                ordersCount: cartItem.quantity,
+              },
+            },
+            { new: true }
+          );
+
+          if (!product) {
+            throw new Error(
+              `Product ${cartItem.productId} is unavailable or has insufficient stock.`
             );
+          }
+
+          reserved.push({
+            productId: product._id,
+            quantity: cartItem.quantity,
+          });
+
+          orderItems.push({
+            productId: product._id,
+            name: product.name,
+            quantity: cartItem.quantity,
+            dealPricePaid: Number(product.discountPrice),
+          });
         }
+
+        const totalAmountPaid = orderItems.reduce(
+          (sum, item) => sum + item.dealPricePaid * item.quantity,
+          0
+        );
+
+        ordersToSave.push(
+          new Order({
+            sellerId,
+            buyerId: userId,
+            buyerName,
+            buyerEmail,
+            address,
+            DTD,
+            items: orderItems,
+            totalAmountPaid,
+            couponCode,
+            discountApplied,
+            paymentMethods,
+          })
+        );
+      }
+
+      await Order.insertMany(ordersToSave);
+    } catch (checkoutError) {
+      // Restore inventory if reservation or order insertion fails.
+      for (const reservation of reserved) {
+        await Product.findByIdAndUpdate(reservation.productId, {
+          $inc: {
+            stock: reservation.quantity,
+            ordersCount: -reservation.quantity,
+          },
+        }).catch((restoreError) => {
+          console.error('Inventory rollback error:', restoreError);
+        });
+      }
+
+      throw checkoutError;
+    }
+
+    if (couponCode) {
+      await Coupon.findOneAndUpdate(
+        { code: String(couponCode).toUpperCase() },
+        { $set: { isRedeemed: true } }
+      );
     }
 
     await CartItem.deleteMany({ userId });
-    return res.status(201).json({ success: true, message: 'processed successfully.' });
 
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: 'Internal transaction checkpoint breakdown failure.' });
+    return res.status(201).json({
+      success: true,
+      message: 'Checkout completed successfully.',
+      orders: ordersToSave,
+    });
+  } catch (error) {
+    console.error('Checkout error:', error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Checkout failed.',
+    });
   }
 });
 
-// PUT /api/products/orders/pay/:orderId
+// ============================================================
+// PUT: Update checkout/payment status
+// PUT /api/products/orders/checkout/:orderId
+// ============================================================
+
 router.put('/orders/checkout/:orderId', async (req, res) => {
-    try {
-        const { orderId } = req.params;
-        const { paymentMethods, paymentStatus ,status} = req.body;
-        console.log(paymentMethods,paymentStatus)
+  try {
+    const { orderId } = req.params;
+    const { paymentMethods, paymentStatus, status } = req.body;
 
-        // Find the order and update the payment details
-        const updatedOrder = await Order.findByIdAndUpdate(
-            orderId,
-            { 
-                $set: { 
-                    paymentMethods: paymentMethods, 
-                    paymentStatus: paymentStatus ,
-                    status:status
-                } 
-            },
-            { new: true }
-        );
-
-        if (!updatedOrder) {
-            return res.status(404).json({ message: "Order not found" });
-        }
-
-        res.status(200).json(updatedOrder);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Server error updating payment" });
+    if (!isValidObjectId(orderId)) {
+      return res.status(400).json({ message: 'Invalid order ID.' });
     }
+
+    const updates = {};
+
+    if (paymentMethods !== undefined) updates.paymentMethods = paymentMethods;
+    if (paymentStatus !== undefined) updates.paymentStatus = paymentStatus;
+    if (status !== undefined) updates.status = status;
+
+    const updatedOrder = await Order.findByIdAndUpdate(
+      orderId,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedOrder) {
+      return res.status(404).json({ message: 'Order not found.' });
+    }
+
+    return res.status(200).json(updatedOrder);
+  } catch (error) {
+    console.error('Update payment/order error:', error);
+    return res.status(500).json({
+      message: 'Server error updating payment or order.',
+    });
+  }
 });
 
+// ============================================================
+// GET: Seller orders
+// GET /api/products/orders/seller/:sellerId
+// ============================================================
 
-// 2. GET: Stream live order records belonging to a merchant dashboard
 router.get('/orders/seller/:sellerId', async (req, res) => {
   try {
-    const records = await Order.find({ sellerId: req.params.sellerId }).sort({ createdAt: -1 });
-    return res.status(200).json(records);
-  } catch (err) {
-    return res.status(500).json({ message: 'Failed to extract vendor telemetry datasets.' });
+    const { sellerId } = req.params;
+
+    if (!isValidObjectId(sellerId)) {
+      return res.status(400).json({ message: 'Invalid seller ID.' });
+    }
+
+    const orders = await Order.find({ sellerId }).sort({ createdAt: -1 });
+    return res.status(200).json(orders);
+  } catch (error) {
+    console.error('Seller orders error:', error);
+    return res.status(500).json({ message: 'Failed to load seller orders.' });
   }
 });
+
+// ============================================================
+// GET: Buyer orders
+// GET /api/products/orders/buyer/:buyerId
+// ============================================================
 
 router.get('/orders/buyer/:buyerId', async (req, res) => {
   try {
-    const records = await Order.find({ buyerId: req.params.buyerId }).sort({ createdAt: -1 });
-    return res.status(200).json(records);
-  } catch (err) {
-    return res.status(500).json({ message: 'Failed to extract vendor telemetry datasets.' });
+    const { buyerId } = req.params;
+
+    if (!isValidObjectId(buyerId)) {
+      return res.status(400).json({ message: 'Invalid buyer ID.' });
+    }
+
+    const orders = await Order.find({ buyerId }).sort({ createdAt: -1 });
+    return res.status(200).json(orders);
+  } catch (error) {
+    console.error('Buyer orders error:', error);
+    return res.status(500).json({ message: 'Failed to load buyer orders.' });
   }
 });
 
-
+// ============================================================
+// CRON: Mark orders delivered when their DTD has passed
+// ============================================================
 
 cron.schedule('0 0 * * *', async () => {
-  console.log('⏳ Running automated delivery status check...');
+  console.log('Running delivery status check...');
 
   try {
-    const rightNow = new Date();
-
-    // Find all orders where the Delivery Date is TODAY or in the PAST
-    // AND the status is not already 'success'
     const result = await Order.updateMany(
-      { 
-        DTD: { $lte: rightNow }, 
-        status: { $ne: 'success' } 
+      {
+        DTD: { $lte: new Date() },
+        status: { $nin: ['success', 'delivered', 'Delivered', 'Cancelled', 'Canceled'] },
       },
-      { 
-        $set: { status: 'success' } 
+      {
+        $set: {
+          status: 'success',
+          deliveryStatus: 'delivered',
+          deliveredAt: new Date(),
+        },
       }
     );
 
-    console.log(`✅ Automation Complete: Updated ${result.modifiedCount} orders to 'success'.`);
+    console.log(`Delivery status check complete: ${result.modifiedCount} orders updated.`);
   } catch (error) {
-    console.error('❌ Automation Error:', error);
+    console.error('Delivery status cron error:', error);
   }
 });
 
+// ============================================================
+// POST: Cancel an order
+// POST /api/products/orders/:orderId/cancel
+// ============================================================
 
-
-
-/* ============================================================
-   POST: CANCEL AN ORDER
-   URL: /api/products/orders/:orderId/cancel
-   ============================================================ */
-
-router.post("/orders/:orderId/cancel", async (req, res) => {
+router.post('/orders/:orderId/cancel', async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { buyerId, reason = "Cancelled by customer" } = req.body;
+    const { buyerId, reason = 'Cancelled by customer' } = req.body;
 
-    if (
-      !mongoose.Types.ObjectId.isValid(orderId) ||
-      !mongoose.Types.ObjectId.isValid(buyerId || "")
-    ) {
+    if (!isValidObjectId(orderId) || !isValidObjectId(buyerId)) {
       return res.status(400).json({
-        message: "Valid order ID and buyer ID are required.",
+        message: 'Valid order ID and buyer ID are required.',
       });
     }
 
     const order = await Order.findById(orderId);
 
     if (!order) {
-      return res.status(404).json({ message: "Order not found." });
+      return res.status(404).json({ message: 'Order not found.' });
     }
 
     if (String(order.buyerId) !== String(buyerId)) {
       return res.status(403).json({
-        message: "You cannot cancel another buyer's order.",
+        message: 'You cannot cancel another buyer’s order.',
       });
     }
 
-    const status = String(order.status || "")
-      .toLowerCase()
-      .replace(/[_-]/g, " ");
-
-    const deliveryStatus = String(order.deliveryStatus || "")
-      .toLowerCase()
-      .replace(/[_-]/g, " ");
-
     const blockedStatuses = [
-      "cancelled",
-      "canceled",
-      "delivered",
-      "success",
-      "completed",
-      "shipped",
-      "dispatched",
-      "out for delivery",
-      "in transit",
-      "picked up",
-      "returned",
+      'cancelled',
+      'canceled',
+      'delivered',
+      'success',
+      'completed',
+      'shipped',
+      'dispatched',
+      'out for delivery',
+      'in transit',
+      'picked up',
+      'returned',
     ];
 
     if (
-      blockedStatuses.includes(status) ||
-      blockedStatuses.includes(deliveryStatus)
+      blockedStatuses.includes(normalizeStatus(order.status)) ||
+      blockedStatuses.includes(normalizeStatus(order.deliveryStatus))
     ) {
       return res.status(400).json({
-        message: "This order can no longer be cancelled.",
+        message: 'This order can no longer be cancelled.',
       });
     }
 
-    // Prevent duplicate cancellation and restore stock only
-    // when this request successfully changes the order status.
     const cancelledOrder = await Order.findOneAndUpdate(
       {
         _id: orderId,
         buyerId,
-        status: { $nin: [
-          "Cancelled", "Canceled", "Delivered", "Success",
-          "Completed", "Shipped", "Dispatched",
-        ] },
-        deliveryStatus: { $nin: [
-          "cancelled", "delivered", "picked_up", "in_transit",
-        ] },
+        status: { $nin: ['Cancelled', 'Canceled', 'Delivered', 'Success', 'Completed', 'Shipped', 'Dispatched'] },
       },
       {
         $set: {
-          status: "Cancelled",
-          deliveryStatus: "cancelled",
+          status: 'Cancelled',
+          deliveryStatus: 'cancelled',
           cancellationReason: String(reason).slice(0, 500),
           cancelledAt: new Date(),
         },
@@ -417,215 +575,189 @@ router.post("/orders/:orderId/cancel", async (req, res) => {
 
     if (!cancelledOrder) {
       return res.status(409).json({
-        message: "Order status changed or the order was already cancelled.",
+        message: 'Order status changed or the order was already cancelled.',
       });
     }
 
-    // Restore inventory for this order.
-    // If restoration fails, log it for reconciliation.
     try {
       for (const item of cancelledOrder.items || []) {
         const quantity = Number(item.quantity || 0);
 
         if (
           !item.productId ||
-          !mongoose.Types.ObjectId.isValid(String(item.productId)) ||
+          !isValidObjectId(item.productId) ||
           !Number.isInteger(quantity) ||
           quantity <= 0
         ) {
-          throw new Error("Invalid order item; inventory needs review.");
+          throw new Error('Invalid order item; inventory needs review.');
         }
 
-        const restoredProduct = await Product.findByIdAndUpdate(
+        const product = await Product.findByIdAndUpdate(
           item.productId,
-          {
-            $inc: {
-              stock: quantity,
-              ordersCount: -quantity,
-            },
-          },
+          { $inc: { stock: quantity, ordersCount: -quantity } },
           { new: true }
         );
 
-        if (!restoredProduct) {
-          throw new Error(
-            `Product ${item.productId} not found during stock restoration.`
-          );
+        if (!product) {
+          throw new Error(`Product ${item.productId} was not found.`);
         }
       }
     } catch (inventoryError) {
-      console.error(
-        "Order cancelled, but inventory restoration needs reconciliation:",
-        orderId,
-        inventoryError
-      );
-
+      console.error('Inventory restoration error:', inventoryError);
       return res.status(500).json({
-        message:
-          "Order was cancelled, but inventory restoration needs administrator attention.",
+        message: 'Order cancelled, but inventory restoration needs administrator attention.',
         orderCancelled: true,
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: "Order cancelled successfully.",
+      message: 'Order cancelled successfully.',
       order: cancelledOrder,
     });
   } catch (error) {
-    console.error("Cancel order error:", error);
-
+    console.error('Cancel order error:', error);
     return res.status(500).json({
-      message: "Server error while cancelling the order.",
+      message: 'Server error while cancelling the order.',
     });
   }
 });
 
+// ============================================================
+// POST: Submit a return request
+// POST /api/products/orders/return-request
+// ============================================================
 
-/* ============================================================
-   POST: SUBMIT A RETURN REQUEST
-   URL: /api/products/orders/return-request
-   ============================================================ */
-
-router.post("/orders/return-request", async (req, res) => {
+router.post('/orders/return-request', async (req, res) => {
   try {
     const {
       buyerId,
       orderId,
       items,
       reason,
-      details = "",
+      details = '',
     } = req.body;
 
-    if (
-      !mongoose.Types.ObjectId.isValid(buyerId || "") ||
-      !mongoose.Types.ObjectId.isValid(orderId || "")
-    ) {
+    if (!isValidObjectId(buyerId) || !isValidObjectId(orderId)) {
       return res.status(400).json({
-        message: "Valid buyer ID and order ID are required.",
+        message: 'Valid buyer ID and order ID are required.',
       });
     }
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
-        message: "Select at least one item to return.",
+        message: 'Select at least one item to return.',
       });
     }
 
-    const allowedReasons = [
-      "Item is damaged or defective",
-      "Wrong item received",
-      "Item is missing parts or accessories",
-      "Item does not match the description",
-      "Size or fit issue",
-      "Changed my mind",
-      "Other",
-    ];
-
-    if (!allowedReasons.includes(reason)) {
-      return res.status(400).json({
-        message: "Invalid return reason.",
-      });
+    if (!RETURN_REASONS.includes(reason)) {
+      return res.status(400).json({ message: 'Invalid return reason.' });
     }
 
-    if (typeof details !== "string" || details.length > 1000) {
+    if (typeof details !== 'string' || details.length > 1000) {
       return res.status(400).json({
-        message: "Additional details cannot exceed 1000 characters.",
+        message: 'Additional details cannot exceed 1000 characters.',
       });
     }
 
     const order = await Order.findById(orderId);
 
     if (!order) {
-      return res.status(404).json({ message: "Order not found." });
+      return res.status(404).json({ message: 'Order not found.' });
     }
 
     if (String(order.buyerId) !== String(buyerId)) {
       return res.status(403).json({
-        message: "You cannot return items from another buyer's order.",
+        message: 'You cannot return items from another buyer’s order.',
       });
     }
 
-    if (String(order.status || "").toLowerCase() !== "delivered") {
+    // Your existing delivery automation uses "success" for delivered orders.
+    const orderStatus = normalizeStatus(order.status);
+    const deliveryStatus = normalizeStatus(order.deliveryStatus);
+
+    if (
+      !DELIVERED_STATUSES.includes(orderStatus) &&
+      !DELIVERED_STATUSES.includes(deliveryStatus)
+    ) {
       return res.status(400).json({
-        message: "Returns are available only after delivery.",
+        message: 'Returns are available only after delivery.',
       });
     }
 
     const deliveredDate =
-      order.deliveredAt || order.updatedAt || order.DTD;
+      order.deliveredAt ||
+      (deliveryStatus === 'delivered' ? order.updatedAt : null) ||
+      (orderStatus === 'delivered' || orderStatus === 'success'
+        ? order.updatedAt
+        : null);
 
-    const deliveredAt = deliveredDate
-      ? new Date(deliveredDate)
-      : null;
+    const deliveredAt = deliveredDate ? new Date(deliveredDate) : null;
 
     if (!deliveredAt || Number.isNaN(deliveredAt.getTime())) {
       return res.status(400).json({
-        message: "A valid delivery date is required to verify eligibility.",
+        message: 'A valid delivery date is required to verify return eligibility.',
       });
     }
 
     const age = Date.now() - deliveredAt.getTime();
-    const sevenDays = 7 * 24 * 60 * 60 * 1000;
 
-    if (age < 0 || age > sevenDays) {
+    if (age < 0) {
       return res.status(400).json({
-        message:
-          age < 0
-            ? "The delivery date is in the future."
-            : "The 7-day return window has ended.",
+        message: 'The delivery date is in the future.',
       });
     }
 
-    const existingRequest = await ReturnRequest.findOne({
-      buyerId,
-      orderId,
-    });
+    if (age > RETURN_WINDOW_MS) {
+      return res.status(400).json({
+        message: 'The 7-day return window has ended.',
+      });
+    }
+
+    const existingRequest = await ReturnRequest.findOne({ buyerId, orderId });
 
     if (existingRequest) {
       return res.status(409).json({
-        message: "A return request already exists for this order.",
+        message: 'A return request already exists for this order.',
         returnRequest: existingRequest,
       });
     }
 
-    // Validate product IDs, quantities and prices against the order.
     const usedLines = new Set();
     const verifiedItems = [];
 
     for (const requestedItem of items) {
+      const productId = String(requestedItem.productId || '');
       const quantity = Number(requestedItem.quantity);
-      const productId = String(requestedItem.productId || "");
 
       if (
-        !mongoose.Types.ObjectId.isValid(productId) ||
+        !isValidObjectId(productId) ||
         !Number.isInteger(quantity) ||
         quantity < 1
       ) {
         return res.status(400).json({
-          message: "Invalid return product or quantity.",
+          message: 'Invalid return product or quantity.',
         });
       }
 
       const itemIndex = (order.items || []).findIndex(
         (original, index) =>
           !usedLines.has(index) &&
-          String(original.productId || "") === productId
+          String(original.productId || '') === productId
       );
 
       if (itemIndex === -1) {
         return res.status(400).json({
-          message: "A selected product does not belong to this order.",
+          message: 'A selected product does not belong to this order.',
         });
       }
 
       const originalItem = order.items[itemIndex];
+      const purchasedQuantity = Number(originalItem.quantity || 0);
 
-      if (quantity > Number(originalItem.quantity || 0)) {
+      if (quantity > purchasedQuantity) {
         return res.status(400).json({
-          message: `Return quantity exceeds the purchased quantity for ${
-            originalItem.name || "this product"
-          }.`,
+          message: `Return quantity exceeds the purchased quantity for ${originalItem.name || 'this product'}.`,
         });
       }
 
@@ -635,7 +767,7 @@ router.post("/orders/return-request", async (req, res) => {
 
       if (!Number.isFinite(unitPrice) || unitPrice < 0) {
         return res.status(400).json({
-          message: "Unable to verify the original product price.",
+          message: 'Unable to verify the original product price.',
         });
       }
 
@@ -643,13 +775,13 @@ router.post("/orders/return-request", async (req, res) => {
 
       verifiedItems.push({
         productId: originalItem.productId,
-        name: originalItem.name || "Product",
+        name: originalItem.name || 'Product',
         quantity,
         unitPrice,
       });
     }
 
-    // Never trust a refund amount calculated by the frontend.
+    // Calculate the refund from trusted order data, not the client request.
     const requestedRefundAmount = verifiedItems.reduce(
       (total, item) => total + item.unitPrice * item.quantity,
       0
@@ -658,68 +790,68 @@ router.post("/orders/return-request", async (req, res) => {
     const returnRequest = await ReturnRequest.create({
       buyerId,
       orderId,
-      orderNumber: String(
-        order.orderId || order.orderNumber || order._id
-      ),
+      orderNumber: String(order.orderId || order.orderNumber || order._id),
       items: verifiedItems,
       reason,
       details: details.trim(),
       requestedRefundAmount,
-      status: "pending",
+      status: 'pending',
     });
 
     return res.status(201).json({
       success: true,
-      message: "Your return request has been submitted successfully.",
+      message: 'Your return request has been submitted successfully.',
       returnRequest,
     });
   } catch (error) {
+    console.error('RETURN REQUEST ERROR:', error);
+
     if (error.code === 11000) {
       return res.status(409).json({
-        message: "A return request already exists for this order.",
+        success: false,
+        message: 'A return request already exists for this order.',
       });
     }
 
-    console.error("Submit return request error:", error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Return request validation failed.',
+        errors: Object.values(error.errors).map((item) => item.message),
+      });
+    }
 
     return res.status(500).json({
-      message: "Server error while submitting the return request.",
+      success: false,
+      message: 'Failed to create return request.',
     });
   }
 });
 
+// ============================================================
+// GET: View a buyer's return requests
+// GET /api/products/orders/return-requests/buyer/:buyerId
+// ============================================================
 
-/* ============================================================
-   GET: VIEW A BUYER'S RETURN REQUESTS
-   URL: /api/products/orders/return-requests/buyer/:buyerId
-   ============================================================ */
+router.get('/orders/return-requests/buyer/:buyerId', async (req, res) => {
+  try {
+    const { buyerId } = req.params;
 
-router.get(
-  "/orders/return-requests/buyer/:buyerId",
-  async (req, res) => {
-    try {
-      const { buyerId } = req.params;
-
-      if (!mongoose.Types.ObjectId.isValid(buyerId)) {
-        return res.status(400).json({
-          message: "Invalid buyer ID.",
-        });
-      }
-
-      const requests = await ReturnRequest.find({ buyerId })
-        .sort({ createdAt: -1 })
-        .lean();
-
-      return res.status(200).json(requests);
-    } catch (error) {
-      console.error("Get return requests error:", error);
-
-      return res.status(500).json({
-        message: "Unable to load return requests.",
-      });
+    if (!isValidObjectId(buyerId)) {
+      return res.status(400).json({ message: 'Invalid buyer ID.' });
     }
-  }
-);
 
+    const requests = await ReturnRequest.find({ buyerId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json(requests);
+  } catch (error) {
+    console.error('Get return requests error:', error);
+    return res.status(500).json({
+      message: 'Unable to load return requests.',
+    });
+  }
+});
 
 export default router;
