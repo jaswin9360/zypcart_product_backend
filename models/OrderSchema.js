@@ -19,7 +19,7 @@ const orderSchema = new mongoose.Schema({
   discountApplied : {type:Number ,required: false },
   DTD :{ type : Date , required: false}, 
   totalAmountPaid: { type: Number, required: true },
-  status: { type: String, enum: ['Processing', 'Shipped', 'Delivered'], default: 'Processing' },
+  status: { type: String, enum: ['Processing', 'Shipped', 'Delivered','Cancelled'], default: 'Processing' },
   deliveryPartnerId: {
   type: String,
   default: null,
@@ -51,7 +51,7 @@ deliveryStatus: {
     "picked_up",
     "in_transit",
     "delivered",
-     'Cancelled',
+    'Cancelled',
   ],
   default: "unassigned",
 },
